@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<meta charset='utf-8'>
+<title>TinyLisp.tutorial</title>
+<style>
+#output {
+	background: #002b36;
+	color: #93a1a1;
+	font-family: Consolas, 'Courier New', monospace;
+	height: 20em;
+	overflow-y: scroll;
+	padding: .5em;
+}
+#output > .entry::before {
+	color: #586e75;
+	content: attr(data-timestamp);
+	margin-right: 1em;
+}
+#output > .entry.error {
+	color: #dc322f;
+}
+#output > .entry.warning {
+	color: #b58900;
+}
+#output > .entry.info {
+	color: #2aa198;
+}
+</style>
+<pre id='output'></pre>
+<script src='main.js'></script>
