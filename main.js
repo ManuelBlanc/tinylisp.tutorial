@@ -3,30 +3,38 @@ class Logger {
 	constructor(id) {
 		this.element = document.getElementById("output");
 	}
-	_write(str, className) {
+	_makeEntry() {
 		const date = new Date();
 		const hh = date.getHours().toString().padStart(2, "0");
 		const mm = date.getMinutes().toString().padStart(2, "0");
 		const ss = date.getMinutes().toString().padStart(2, "0");
-		const uuuu = date.getMilliseconds().toString().padStart(4, "0");
+		const uuuu = date.getMilliseconds().toString().padStart(3, "0");
 		const span = document.createElement("span");
 		span.classList.add("entry");
-		if (className) {
-			span.classList.add(className);
-		}
 		span.dataset.timestamp = `${hh}:${mm}:${ss}.${uuuu}`;
-		span.textContent = str + "\n";
 		this.element.appendChild(span);
 		return span;
 	}
+	_writeText(str, extraClass) {
+		const entry = this._makeEntry();
+		if (extraClass) {
+			entry.classList.add(extraClass);
+		}
+		entry.textContent = str + "\n";
+	}
 	log(str) {
-		this._write(str);
+		this._writeText(str);
 	}
 	error(str) {
-		this._write(str + "\n" + Error().stack.replace(/^[^\n]+\n/, ""), "error");
+		this._writeText(str + "\n" + Error().stack.replace(/^[^\n]+\n/, ""), "error");
 	}
 	warning(str) {
-		this._write(str, "error");
+		this._writeText(str, "warning");
+	}
+	html(html) {
+		const entry = this._makeEntry();
+		entry.innerHTML = html;
+		entry.innerHTML += "\n";
 	}
 	clear() {
 		this.element.innerText = "";
@@ -35,82 +43,107 @@ class Logger {
 
 const out = new Logger("output");
 
-class WasmModuleBuilder {
+class BinaryEncoder {
+	static utf8 = new TextEncoder();
 	constructor() {
-		this._buffer = [
-			0x00, 0x61, 0x73, 0x6D, // magic
-			0x01, 0x00, 0x00, 0x00, // version
-		];
-		this._encoder = new TextEncoder();
+		this.buffer = [];
 	}
 	pushByte(...b) {
-		this._buffer.push(...b);
+		this.buffer.push(...b);
 	}
 	pushString(s) {
-		const buf = this._encoder.encode(s);
+		const buf = BinaryEncoder.utf8.encode(s);
 		this.pushU32(buf.length);
-		this._buffer.push(...buf);
+		this.buffer.push(...buf);
 	}
 	pushU32(v) {
-		const buffer = this._buffer;
+		const buffer = this.buffer;
 		for (; v >= 0x80; v >>= 7) {
 			buffer.push((v & 0x7f) | 0x80);
 		}
 		buffer.push(v);
 	}
-	section(id, cb) {
-		this.pushByte(id);
-		const oldBuffer = this._buffer;
-		const sectionBuffer = []
-		this._buffer = sectionBuffer
+	measuredBlock(cb) {
+		const oldBuffer = this.buffer;
+		const newBuffer = []
+		this.buffer = newBuffer
 		cb();
-		this._buffer = oldBuffer;
-		this.pushU32(sectionBuffer.length);
-		oldBuffer.push(...sectionBuffer);
+		this.buffer = oldBuffer;
+		this.pushU32(newBuffer.length);
+		oldBuffer.push(...newBuffer);
 	}
 	toUint8Array() {
-		return new Uint8Array(this._buffer);
+		return new Uint8Array(this.buffer);
 	}
 }
 
-const builder = new WasmModuleBuilder();
 
-builder.section(0, () => { // custom section
-	builder.pushString("abc"); // custom section byte length
-	builder.pushByte(0xca, 0xfe);
-});
+const Type = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, Vec: 0x7b, FuncRef: 0x70, ExternRef: 0x6f, Func: 0x60, };
+const Section = { Type: 1, Function: 3, Export: 7, Code: 10, };
+const Export = { Func: 0x00, Table: 0x01, Mem: 0x02, Global: 0x03, };
 
-builder.section(1, () => { // type section
-	builder.pushU32(1); // type vector length
-	builder.pushByte(0x60); // functype
-	builder.pushU32(0); // resulttype1 vector length
-	builder.pushU32(1); // resulttype2 vector length
-	builder.pushByte(0x7f); // numtype i32
-});
+class WasmAssembler {
+	constructor() {
+		this.functions = [];
+	}
+	pushFunction(def) {
+		this.functions.push(def);
+	}
+	assemble() {
+		const functions = this.functions;
+		const enc = new BinaryEncoder();
+		enc.pushByte(
+			0x00, 0x61, 0x73, 0x6D, // magic
+			0x01, 0x00, 0x00, 0x00, // version
+		);
 
-builder.section(3, () => {  // function section
-	builder.pushU32(1); // func vector length
-	builder.pushU32(0); // typeidx
-});
+		const section = (id, cb) => {
+			enc.pushByte(id);
+			enc.measuredBlock(cb);
+		};
 
-builder.section(7, () => { // export section
-	builder.pushU32(1); // export vector length
-	builder.pushString("main"); // name
-	builder.pushByte(0x00); // func
-	builder.pushU32(0); // funcidx
-});
+		section(Section.Type, () => {
+			enc.pushU32(functions.length);
+			functions.forEach((func) => {
+				enc.pushByte(Type.Func);
+				enc.pushU32(func.arg.length);
+				enc.pushByte(...func.arg);
+				enc.pushU32(func.ret.length);
+				enc.pushByte(...func.ret);
+			});
+		});
 
-// start section?
+		section(Section.Function, () => {
+			enc.pushU32(functions.length);
+			functions.forEach((_func, i) => {
+				enc.pushU32(i)
+			});
+		});
 
-builder.section(10, () => { // code section
-	builder.pushU32(1); // code vector length
-	builder.pushU32(4); // code size
-	builder.pushU32(0); // locals vector length
-	builder.pushByte(0x41); builder.pushU32(5); // i32.const n
-	builder.pushByte(0x0b); // end
-});
+		section(Section.Export, () => {
+			const exports = functions.filter((func) => func.export);
+			enc.pushU32(exports.length);
+			exports.forEach((func, i) => {
+				enc.pushString(func.name);
+				enc.pushByte(Export.Func);
+				enc.pushU32(i);
+			});
+		});
 
-const bytecode = builder.toUint8Array();
+		section(Section.Code, () => {
+			enc.pushU32(functions.length);
+			functions.forEach((func) => {
+				enc.measuredBlock(() => {
+					enc.pushU32(0); // locals
+					func.code(enc);
+					enc.pushByte(0x0b); // end
+				})
+			});
+		});
+
+		return enc.toUint8Array();
+	}
+}
 
 const hexdump = (buffer) => {
 	for (let i=0; i < buffer.length; i += 16) {
@@ -120,28 +153,50 @@ const hexdump = (buffer) => {
 			return byte.toString(16).padStart(2, "0") + (i === 7 ? " " : "");
 		}).join(" ").padEnd(48);
 		const chr = slice.map((byte) => {
-			return byte >= 32 && byte < 127 ? String.fromCharCode(byte) : ".";
+			return (byte >= 32 && byte < 127) ? String.fromCharCode(byte) : ".";
 		});
 		out.log(`${pos}  ${hex}  |${chr.join("")}|`);
 	}
 }
 
-out.log(`Bytecode length: ${bytecode.length}`)
-hexdump(bytecode);
-
-const imports = {
-	imports: {
-		log(arg) {
-			out.log(arg);
-		},
-	},
-};
-
 try {
-	out.log("Creating module...")
+	out.log("Assembling bytecode...")
+	const asm = new WasmAssembler();
+	asm.pushFunction({
+		name: "main",
+		export: true,
+		arg: [ ],
+		ret: [ Type.i32 ],
+		code: (enc) => {
+			//enc.pushByte(0x20); enc.pushU32(0); // local.get $0
+			//enc.pushByte(0x20); enc.pushU32(0); // local.get $0
+			enc.pushByte(0x41); enc.pushU32(123456); // i32.const n
+			//enc.pushByte(0x6A); // i32.add
+		},
+	});
+	const bytecode = asm.assemble();
+
+	hexdump(bytecode);
+
+	const link = document.createElement("a");
+	link.href = URL.createObjectURL(new Blob([bytecode], {type: "application/wasm"}));
+	link.innerText = "Download bytecode";
+	link.download = "a.wasm";
+	out.html(link.outerHTML)
+
+	out.log("Compiling module...")
 	const module = new WebAssembly.Module(bytecode);
+
 	out.log("Instantiating...")
+	const imports = {
+		imports: {
+			log(arg) {
+				out.log(arg);
+			},
+		},
+	};
 	const instance = new WebAssembly.Instance(module, imports);
+
 	out.log("Executing `main`...")
 	out.log(`=> ${instance.exports.main()}`);
 } catch (err) {
