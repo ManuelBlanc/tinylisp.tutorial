@@ -1,4 +1,8 @@
 "use strict";
+const ASSERT = (cond) => {
+	if (!cond) throw new Error("assertion failed!");
+};
+
 class Logger {
 	constructor(id) {
 		this.element = document.getElementById("output");
@@ -77,10 +81,14 @@ class BinaryEncoder {
 	}
 }
 
-
 const Type = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, Vec: 0x7b, FuncRef: 0x70, ExternRef: 0x6f, Func: 0x60, };
 const Section = { Type: 1, Function: 3, Export: 7, Code: 10, };
 const Export = { Func: 0x00, Table: 0x01, Mem: 0x02, Global: 0x03, };
+const OpCode = {
+	"i32.const": 0x41,
+	"i32.add": 0x6A,
+	"local.get": 0x20,
+};
 
 class WasmAssembler {
 	constructor() {
@@ -88,6 +96,14 @@ class WasmAssembler {
 	}
 	pushFunction(def) {
 		this.functions.push(def);
+	}
+	compile(value) {
+		if (Number.isInteger(value)) {
+			ASSERT(value|0 === value)
+			return value;
+		}
+		ASSERT(Array.isArray(value));
+		return 
 	}
 	assemble() {
 		const functions = this.functions;
@@ -101,7 +117,6 @@ class WasmAssembler {
 			enc.pushByte(id);
 			enc.measuredBlock(cb);
 		};
-
 		section(Section.Type, () => {
 			enc.pushU32(functions.length);
 			functions.forEach((func) => {
@@ -112,14 +127,12 @@ class WasmAssembler {
 				enc.pushByte(...func.ret);
 			});
 		});
-
 		section(Section.Function, () => {
 			enc.pushU32(functions.length);
 			functions.forEach((_func, i) => {
 				enc.pushU32(i)
 			});
 		});
-
 		section(Section.Export, () => {
 			const exports = functions.filter((func) => func.export);
 			enc.pushU32(exports.length);
@@ -129,7 +142,6 @@ class WasmAssembler {
 				enc.pushU32(i);
 			});
 		});
-
 		section(Section.Code, () => {
 			enc.pushU32(functions.length);
 			functions.forEach((func) => {
@@ -140,7 +152,6 @@ class WasmAssembler {
 				})
 			});
 		});
-
 		return enc.toUint8Array();
 	}
 }
@@ -168,10 +179,8 @@ try {
 		arg: [ ],
 		ret: [ Type.i32 ],
 		code: (enc) => {
-			//enc.pushByte(0x20); enc.pushU32(0); // local.get $0
-			//enc.pushByte(0x20); enc.pushU32(0); // local.get $0
-			enc.pushByte(0x41); enc.pushU32(123456); // i32.const n
-			//enc.pushByte(0x6A); // i32.add
+			enc.pushByte(OpCode["i32.const"]);
+				enc.pushU32(123);
 		},
 	});
 	const bytecode = asm.assemble();
