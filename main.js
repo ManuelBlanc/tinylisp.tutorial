@@ -62,10 +62,17 @@ class BinaryEncoder {
 	}
 	pushU32(v) {
 		const buffer = this.buffer;
-		for (; v >= 0x80; v >>= 7) {
+		for (; v & ~0x7f; v >>>= 7) {
 			buffer.push((v & 0x7f) | 0x80);
 		}
 		buffer.push(v);
+	}
+	pushI32(v) {
+		const buffer = this.buffer;
+		for (; (v >> 6) ^ (v >> 7); v >>= 7) {
+			buffer.push((v & 0x7f) | 0x80);
+		}
+		buffer.push(v & 0x7f);
 	}
 	measuredBlock(cb) {
 		const oldBuffer = this.buffer;
@@ -180,7 +187,7 @@ try {
 		ret: [ Type.i32 ],
 		code: (enc) => {
 			enc.pushByte(OpCode["i32.const"]);
-				enc.pushU32(123);
+			enc.pushI32(123);
 		},
 	});
 	const bytecode = asm.assemble();
