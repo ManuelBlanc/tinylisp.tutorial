@@ -49,6 +49,7 @@ const out = new Logger("output");
 
 class BinaryEncoder {
 	static utf8 = new TextEncoder();
+	static f64 = new DataView(new ArrayBuffer(8));
 	constructor() {
 		this.buffer = [];
 	}
@@ -74,6 +75,14 @@ class BinaryEncoder {
 		}
 		buffer.push(v & 0x7f);
 	}
+	pushF64(v) {
+		const f64 = BinaryEncoder.f64;
+		f64.setFloat64(0, v, true);
+		this.buffer.push(
+			f64.getUint8(0), f64.getUint8(1), f64.getUint8(2), f64.getUint8(3),
+			f64.getUint8(4), f64.getUint8(5), f64.getUint8(6), f64.getUint8(7),
+		);
+	}
 	measuredBlock(cb) {
 		const oldBuffer = this.buffer;
 		const newBuffer = []
@@ -94,6 +103,7 @@ const Export = { Func: 0x00, Table: 0x01, Mem: 0x02, Global: 0x03, };
 const OpCode = {
 	"local.get": 0x20,
 	"i32.const": 0x41,
+	"f64.const": 0x44,
 	"i32.clz": 0x67,
 	"i32.ctz": 0x68,
 	"i32.popcnt": 0x69,
@@ -112,32 +122,53 @@ const OpCode = {
 	"i32.shr_u": 0x76,
 	"i32.rotl": 0x77,
 	"i32.rotr": 0x78,
+	"f64.abs": 0x99,
+	"f64.neg": 0x9A,
+	"f64.ceil": 0x9B,
+	"f64.floor": 0x9C,
+	"f64.trunc": 0x9D,
+	"f64.nearest": 0x9E,
+	"f64.sqrt": 0x9F,
+	"f64.add": 0xA0,
+	"f64.sub": 0xA1,
+	"f64.mul": 0xA2,
+	"f64.div": 0xA3,
+	"f64.min": 0xA4,
+	"f64.max": 0xA5,
+	"f64.copysign": 0xA6,
 };
 
-const OpArity = {
+const i32OpArity = {
 	"clz": 1, "ctz": 1, "popcnt": 1,
 	"add": 2, "sub": 2, "mul": 2,
 	"div_s": 2, "div_u": 2, "rem_s": 2, "rem_u": 2,
 	"and": 2, "or": 2, "xor": 2,
 	"shl": 2, "shr_s": 2, "rotl": 2, "rotr": 2,
 };
+const f64OpArity = {
+	"abs": 1, "neg": 1, "sqrt": 1, "ceil": 1, "floor": 1, "trunc": 1, "nearest": 1,
+	"add": 2, "sub": 2, "mul": 2, "div": 2, "min": 2, "max": 2, "copysign": 2,
+}
 
 class Asssembler {
 	constructor() {
 		this._encoder = new BinaryEncoder();
 	}
-	_assembleInteger(n) {
+	_assembleNumber(n) {
 		const enc = this._encoder;
-		enc.pushByte(OpCode["i32.const"]);
-		enc.pushI32(n);
+		enc.pushByte(OpCode["f64.const"]);
+		enc.pushF64(n);
 	}
 	_assemblePrimitive(op, args) {
 		const enc = this._encoder;
-		if (OpArity[op]) {
-			for (let i = 0; i < OpArity[op]; ++i) {
+		if (f64OpArity[op]) {
+			for (let i = 0; i < f64OpArity[op]; ++i) {
 				this._assembleExpr(args[i]);
 			}
-			enc.pushByte(OpCode[`i32.${op}`]);
+			enc.pushByte(OpCode[`f64.${op}`]);
+		} else if (op === "$local") {
+			enc.pushByte(OpCode["local.get"]);
+			enc.pushU32(args[0]);
 		} else {
 			switch (op) {
 				case "zero?":
@@ -155,7 +186,7 @@ class Asssembler {
 	}
 	_assembleExpr(expr) {
 		if (typeof expr === "number") {
-			this._assembleInteger(expr);
+			this._assembleNumber(expr);
 		} else if (Array.isArray(expr)) {
 			if (typeof expr[0] === "string") {
 				const [op, ...args] = expr;
@@ -238,9 +269,9 @@ try {
 		functions: [{
 			name: "main",
 			export: true,
-			arg: [ ],
-			ret: [ Type.i32 ],
-			code: ["mul", 3, ["sub", 5, 3]],
+			arg: [ Type.f64 ],
+			ret: [ Type.f64 ],
+			code: ["mul", 3.14, ["mul", ["$local", 0], ["$local", 0]]],
 		}],
 	});
 
@@ -266,7 +297,7 @@ try {
 	const instance = new WebAssembly.Instance(module, imports);
 
 	out.log("Executing `main`...")
-	out.log(`=> ${instance.exports.main()}`);
+	out.log(`=> ${instance.exports.main(7)}`);
 } catch (err) {
 	out.error(err);
 	throw err;
