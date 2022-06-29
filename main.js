@@ -92,45 +92,74 @@ const Type = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, Vec: 0x7b, FuncRef: 0
 const Section = { Type: 1, Function: 3, Export: 7, Code: 10, };
 const Export = { Func: 0x00, Table: 0x01, Mem: 0x02, Global: 0x03, };
 const OpCode = {
+	"local.get": 0x20,
 	"i32.const": 0x41,
+	"i32.clz": 0x67,
+	"i32.ctz": 0x68,
+	"i32.popcnt": 0x69,
 	"i32.add": 0x6A,
 	"i32.sub": 0x6B,
-	"local.get": 0x20,
+	"i32.mul": 0x6C,
+	"i32.div_s": 0x6D,
+	"i32.div_u": 0x6E,
+	"i32.rem_s": 0x6F,
+	"i32.rem_u": 0x70,
+	"i32.and": 0x71,
+	"i32.or": 0x72,
+	"i32.xor": 0x73,
+	"i32.shl": 0x74,
+	"i32.shr_s": 0x75,
+	"i32.shr_u": 0x76,
+	"i32.rotl": 0x77,
+	"i32.rotr": 0x78,
+};
+
+const OpArity = {
+	"clz": 1, "ctz": 1, "popcnt": 1,
+	"add": 2, "sub": 2, "mul": 2,
+	"div_s": 2, "div_u": 2, "rem_s": 2, "rem_u": 2,
+	"and": 2, "or": 2, "xor": 2,
+	"shl": 2, "shr_s": 2, "rotl": 2, "rotr": 2,
 };
 
 class Asssembler {
 	constructor() {
 		this._encoder = new BinaryEncoder();
 	}
-	_assembleExpr(expr) {
+	_assembleInteger(n) {
 		const enc = this._encoder;
+		enc.pushByte(OpCode["i32.const"]);
+		enc.pushI32(n);
+	}
+	_assemblePrimitive(op, args) {
+		const enc = this._encoder;
+		if (OpArity[op]) {
+			for (let i = 0; i < OpArity[op]; ++i) {
+				this._assembleExpr(args[i]);
+			}
+			enc.pushByte(OpCode[`i32.${op}`]);
+		} else {
+			switch (op) {
+				case "zero?":
+					this._assembleExpr(args[0])
+					enc.pushByte(0x04, Type.i32);
+					this._assembleExpr(0);
+					enc.pushByte(0x05);
+					this._assembleExpr(1);
+					enc.pushByte(0x0B);
+					break;
+				default:
+					throw new Error(`Unknown op: ${op}`)
+			}
+		}
+	}
+	_assembleExpr(expr) {
 		if (typeof expr === "number") {
-			enc.pushByte(OpCode["i32.const"]);
-			enc.pushI32(expr);
+			this._assembleInteger(expr);
 		} else if (Array.isArray(expr)) {
 			if (typeof expr[0] === "string") {
-				switch (expr[0]) {
-					case "add1":
-						this._assembleExpr(expr[1]);
-						this._assembleExpr(1);
-						enc.pushByte(OpCode["i32.add"]);
-						break;
-					case "sub1":
-						this._assembleExpr(expr[1])
-						this._assembleExpr(1)
-						enc.pushByte(OpCode["i32.sub"]);
-						break;
-					case "zero?":
-						this._assembleExpr(expr[1])
-						enc.pushByte(0x04, Type.i32);
-						this._assembleExpr(0);
-						enc.pushByte(0x05);
-						this._assembleExpr(1);
-						enc.pushByte(0x0B);
-						break;
-					default:
-						throw new Error(`Unknown function: ${expr[0]}`)
-				}
+				const [op, ...args] = expr;
+				this._assemblePrimitive(op, args);
 			}
 		} else {
 			throw new Error(`Unknown expression: ${expr}`);
@@ -144,7 +173,7 @@ class Asssembler {
 			0x00, 0x61, 0x73, 0x6D, // magic
 			0x01, 0x00, 0x00, 0x00, // version
 		);
-
+	
 		const section = (id, cb) => {
 			enc.pushByte(id);
 			enc.measuredBlock(cb);
@@ -211,7 +240,7 @@ try {
 			export: true,
 			arg: [ ],
 			ret: [ Type.i32 ],
-			code: ["add1", ["zero?", ["sub1", 1]]],
+			code: ["mul", 3, ["sub", 5, 3]],
 		}],
 	});
 
