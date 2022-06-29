@@ -94,27 +94,52 @@ const Export = { Func: 0x00, Table: 0x01, Mem: 0x02, Global: 0x03, };
 const OpCode = {
 	"i32.const": 0x41,
 	"i32.add": 0x6A,
+	"i32.sub": 0x6B,
 	"local.get": 0x20,
 };
 
-class WasmAssembler {
+class Asssembler {
 	constructor() {
-		this.functions = [];
+		this._encoder = new BinaryEncoder();
 	}
-	pushFunction(def) {
-		this.functions.push(def);
-	}
-	compile(value) {
-		if (Number.isInteger(value)) {
-			ASSERT(value|0 === value)
-			return value;
+	_assembleExpr(expr) {
+		const enc = this._encoder;
+		if (typeof expr === "number") {
+			enc.pushByte(OpCode["i32.const"]);
+			enc.pushI32(expr);
+		} else if (Array.isArray(expr)) {
+			if (typeof expr[0] === "string") {
+				switch (expr[0]) {
+					case "add1":
+						this._assembleExpr(expr[1]);
+						this._assembleExpr(1);
+						enc.pushByte(OpCode["i32.add"]);
+						break;
+					case "sub1":
+						this._assembleExpr(expr[1])
+						this._assembleExpr(1)
+						enc.pushByte(OpCode["i32.sub"]);
+						break;
+					case "zero?":
+						this._assembleExpr(expr[1])
+						enc.pushByte(0x04, Type.i32);
+						this._assembleExpr(0);
+						enc.pushByte(0x05);
+						this._assembleExpr(1);
+						enc.pushByte(0x0B);
+						break;
+					default:
+						throw new Error(`Unknown function: ${expr[0]}`)
+				}
+			}
+		} else {
+			throw new Error(`Unknown expression: ${expr}`);
 		}
-		ASSERT(Array.isArray(value));
-		return 
 	}
-	assemble() {
-		const functions = this.functions;
-		const enc = new BinaryEncoder();
+	assembleModule(def) {
+		const { functions } = def;
+		const enc = this._encoder;
+
 		enc.pushByte(
 			0x00, 0x61, 0x73, 0x6D, // magic
 			0x01, 0x00, 0x00, 0x00, // version
@@ -154,7 +179,7 @@ class WasmAssembler {
 			functions.forEach((func) => {
 				enc.measuredBlock(() => {
 					enc.pushU32(0); // locals
-					func.code(enc);
+					this._assembleExpr(func.code);
 					enc.pushByte(0x0b); // end
 				})
 			});
@@ -178,19 +203,17 @@ const hexdump = (buffer) => {
 }
 
 try {
-	out.log("Assembling bytecode...")
-	const asm = new WasmAssembler();
-	asm.pushFunction({
-		name: "main",
-		export: true,
-		arg: [ ],
-		ret: [ Type.i32 ],
-		code: (enc) => {
-			enc.pushByte(OpCode["i32.const"]);
-			enc.pushI32(123);
-		},
+	out.log("Assembling bytecode...");
+
+	const bytecode = new Asssembler().assembleModule({
+		functions: [{
+			name: "main",
+			export: true,
+			arg: [ ],
+			ret: [ Type.i32 ],
+			code: ["add1", ["zero?", ["sub1", 1]]],
+		}],
 	});
-	const bytecode = asm.assemble();
 
 	hexdump(bytecode);
 
