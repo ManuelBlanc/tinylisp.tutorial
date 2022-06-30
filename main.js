@@ -43,6 +43,9 @@ class Logger {
 	clear() {
 		this.element.innerText = "";
 	}
+	scrollToBottom() {
+		this.element.scrollIntoView(false);
+	}
 }
 
 const out = new Logger("output");
@@ -162,6 +165,10 @@ const OpCode = new Proxy({
 	"f64.min": 0xA4,
 	"f64.max": 0xA5,
 	"f64.copysign": 0xA6,
+
+	"end": 0x0B,
+	"if": 0x04,
+	"else": 0x05,
 }, {
 	get(lut, op) {
 		const code = lut[op];
@@ -207,18 +214,18 @@ class Asssembler {
 	}
 	_constructBoolean() {
 		const enc = this._encoder;
-		enc.pushByte(0x04, Type.f64); // ~20% faster than branchless.
+		enc.pushByte(OpCode["if"], Type.f64); // ~20% faster than branchless.
 		this._assembleBoolean(true);
-		enc.pushByte(0x05);
+		enc.pushByte(OpCode["else"]);
 		this._assembleBoolean(false);
-		enc.pushByte(0x0B);
+		enc.pushByte(OpCode["end"]);
 	}
 	_constructCheckTruthy() {
 		this._encoder.pushByte(
-			OpCode["i64.reinterpret_f64"], //  *(int64_t)&
-			OpCode["i64.const"], 47+1, OpCode["i64.shr_s"], // >> 38
-			OpCode["i32.wrap_i64"], // (int32_t)
-			OpCode["i32.const"], 0x7f, OpCode["i32.ne"], // != -1
+			OpCode["i64.reinterpret_f64"],
+			OpCode["i64.const"], 47+1, OpCode["i64.shr_s"],
+			OpCode["i32.wrap_i64"],
+			OpCode["i32.const"], 0x7f, OpCode["i32.ne"],
 		);
 	}
 	_assembleBuiltin(op, args) {
@@ -235,6 +242,15 @@ class Asssembler {
 			this._assembleExpr(args[0]);
 			enc.pushByte(OpCode["i64.reinterpret_f64"], OpCode["i64.eqz"]);
 			this._constructBoolean();
+		} else if (op === "nan?") {
+			this._assembleExpr(args[0]);
+			enc.pushByte(
+				OpCode["i64.reinterpret_f64"],
+				OpCode["i64.const"], 47, OpCode["i64.shr_s"],
+				OpCode["i32.wrap_i64"],
+				OpCode["i32.const"], 0x70, OpCode["i32.eq"],
+			);
+			this._constructBoolean();
 		} else if (op === "eq?") {
 			this._assembleExpr(args[0]);
 			enc.pushByte(OpCode["i64.reinterpret_f64"]);
@@ -244,11 +260,11 @@ class Asssembler {
 		} else if (op === "if") {
 			this._assembleExpr(args[0]);
 			this._constructCheckTruthy();
-			enc.pushByte(0x04, Type.f64);
+			enc.pushByte(OpCode["if"], Type.f64);
 			this._assembleExpr(args[1]);
-			enc.pushByte(0x05);
+			enc.pushByte(OpCode["else"]);
 			this._assembleExpr(args[2]);
-			enc.pushByte(0x0B);
+			enc.pushByte(OpCode["end"]);
 		} else {
 			throw new Error(`Unknown op: ${op}`)
 		}
@@ -312,7 +328,7 @@ class Asssembler {
 				enc.measuredBlock(() => {
 					enc.pushU32(0); // locals
 					this._assembleExpr(func.code);
-					enc.pushByte(0x0b); // end
+					enc.pushByte(OpCode["end"]);
 				})
 			});
 		});
@@ -349,8 +365,16 @@ const lispToString = (expr) => {
 	}
 };
 
-const compileLisp = (code) => {
-	const bytecode = new Asssembler().assembleModule({
+const showBytecodeLink = (bytecode) => {
+	const link = document.createElement("a");
+	link.href = URL.createObjectURL(new Blob([bytecode], {type: "application/wasm"}));
+	link.innerText = "Download bytecode";
+	link.download = "a.wasm";
+	out.html(link.outerHTML)
+};
+
+const assembleLisp = (code) => {
+	return new Asssembler().assembleModule({
 		functions: [{
 			name: "main",
 			export: true,
@@ -359,22 +383,29 @@ const compileLisp = (code) => {
 			code,
 		}],
 	});
+};
+
+const compileLisp = (bytecode) => {
 	const module = new WebAssembly.Module(bytecode);
 	const instance = new WebAssembly.Instance(module);
 	return instance.exports.main;
-};
+}
 
 const evaluateLisp = (code, ...args) => {
-	const main = compileLisp(code);
+	const main = compileLisp(assembleLisp(code));
 	return main(...args);
 };
 
 let _testCount = 0;
 const runTest = (code, expected, ...args) => {
-	out.log(`TEST: ${expected.toString().padStart(5)} === ${lispToString(code)}`);
-	const actual = evaluateLisp(code, ...args);
-	if (!isNaN(expected) ? actual !== expected : !isNaN(actual)) {
-		throw new Error(`Test failed. Expected '${expected}', but got '${actual}'`);
+	out.log(`TEST ${(++_testCount).toString().padStart(3,"0")}: ${expected.toString().padStart(8)} == ${lispToString(code)}`);
+	const bytecode = assembleLisp(code);
+	const main = compileLisp(bytecode);
+	const result = main(...args);
+	if (!isNaN(expected) ? result !== expected : !isNaN(result)) {
+		showBytecodeLink(bytecode);
+		hexdump(bytecode);
+		throw new Error(`Test failed. Expected '${expected}', but got '${result}'`);
 	}
 };
 
@@ -397,14 +428,6 @@ const benchmark = async (code) => {
 	avg /= results.length;
 	out.log(`BENCHMARK: ${lispToString(code)}  =>  ${results.join("  ")} :: ${avg.toFixed(1)} ms`)
 }
-
-const showBytecodeLink = (bytecode) => {
-	const link = document.createElement("a");
-	link.href = URL.createObjectURL(new Blob([bytecode], {type: "application/wasm"}));
-	link.innerText = "Download bytecode";
-	link.download = "a.wasm";
-	out.html(link.outerHTML)
-};
 
 try {
 	runTest(5, 5)
@@ -432,10 +455,21 @@ try {
 	runTest(["if", ["eq?", true, null], 100, 0], 0)
 	runTest(["if", ["eq?", false, null], 100, 0], 0)
 	runTest(["if", ["eq?", NaN, null], 100, 0], 0)
+	runTest(["if", ["nan?", 0], 100, 0], 0)
+	runTest(["if", ["nan?", false], 100, 0], 0)
+	runTest(["if", ["nan?", true], 100, 0], 0)
+	runTest(["if", ["nan?", null], 100, 0], 0)
+	runTest(["if", ["nan?", 1], 100, 0], 0)
+	runTest(["if", ["nan?", ["div", 0, 0]], 100, 0], 100)
+	runTest(["if", ["if", true, false, true], true, 0], 0)
 	out.log("All tests passed!")
 
 	//benchmark(["zero?", 0])
 	//benchmark(["zero?", 42])
+	benchmark(["nan?", 42])
+	benchmark(["nan?", NaN])
+
+	out.scrollToBottom();
 
 } catch (err) {
 	out.error(err);
