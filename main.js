@@ -57,11 +57,13 @@ class BinaryEncoder {
 		this.buffer.push(...b);
 	}
 	pushString(s) {
+		ASSERT(typeof s === "string");
 		const buf = BinaryEncoder.utf8.encode(s);
 		this.pushU32(buf.length);
 		this.buffer.push(...buf);
 	}
 	pushU32(v) {
+		ASSERT(Number.isInteger(v) && v >= 0 && v < 2**32);
 		const buffer = this.buffer;
 		for (; v & ~0x7f; v >>>= 7) {
 			buffer.push((v & 0x7f) | 0x80);
@@ -69,6 +71,7 @@ class BinaryEncoder {
 		buffer.push(v);
 	}
 	pushI32(v) {
+		ASSERT(Number.isInteger(v) && v >= -(2**31) && v < 2**31);
 		const buffer = this.buffer;
 		for (; (v >> 6) ^ (v >> 7); v >>= 7) {
 			buffer.push((v & 0x7f) | 0x80);
@@ -76,6 +79,7 @@ class BinaryEncoder {
 		buffer.push(v & 0x7f);
 	}
 	pushF64(v) {
+		ASSERT(typeof v === "number");
 		const f64 = BinaryEncoder.f64;
 		f64.setFloat64(0, v, true);
 		this.buffer.push(
@@ -100,10 +104,21 @@ class BinaryEncoder {
 const Type = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, Vec: 0x7b, FuncRef: 0x70, ExternRef: 0x6f, Func: 0x60, };
 const Section = { Type: 1, Function: 3, Export: 7, Code: 10, };
 const Export = { Func: 0x00, Table: 0x01, Mem: 0x02, Global: 0x03, };
-const OpCode = {
+const OpCode = new Proxy({
 	"local.get": 0x20,
+
 	"i32.const": 0x41,
+	"i64.const": 0x42,
 	"f64.const": 0x44,
+
+	"i32.wrap_i64": 0xA7,
+	"i64.reinterpret_f64": 0xBD,
+	"f64.reinterpret_i64": 0xBF,
+	"i64.extend_i32_u": 0xAD,
+
+	"i32.eqz": 0x45,
+	"i32.eq": 0x46,
+	"i32.ne": 0x47,
 	"i32.clz": 0x67,
 	"i32.ctz": 0x68,
 	"i32.popcnt": 0x69,
@@ -122,6 +137,16 @@ const OpCode = {
 	"i32.shr_u": 0x76,
 	"i32.rotl": 0x77,
 	"i32.rotr": 0x78,
+
+	"i64.eqz": 0x50,
+	"i64.ne": 0x52,
+	"i64.or": 0x84,
+	"i64.xor": 0x85,
+	"i64.shl": 0x86,
+	"i64.shr_s": 0x87,
+	"i64.rotr": 0x8A,
+
+	"f64.eq": 0x61,
 	"f64.abs": 0x99,
 	"f64.neg": 0x9A,
 	"f64.ceil": 0x9B,
@@ -136,7 +161,15 @@ const OpCode = {
 	"f64.min": 0xA4,
 	"f64.max": 0xA5,
 	"f64.copysign": 0xA6,
-};
+}, {
+	get(lut, op) {
+		const code = lut[op];
+		if (!code) {
+			throw new Error(`Operation '${op}' not defined.`);
+		}
+		return code;
+	},
+});
 
 const i32OpArity = {
 	"clz": 1, "ctz": 1, "popcnt": 1,
@@ -159,7 +192,44 @@ class Asssembler {
 		enc.pushByte(OpCode["f64.const"]);
 		enc.pushF64(n);
 	}
-	_assemblePrimitive(op, args) {
+	_assemblePrimitive(id) {
+		id = ~id;
+		const enc = this._encoder;
+		enc.pushByte(OpCode["f64.const"]);
+		enc.pushByte(0xff,0xff,0xff,0xff,0xff,0x7f|(id<<7 & 0x80),0xf8|(id>>1 & 0x7),0xff);
+	}
+	_assembleNil() {
+		this._assemblePrimitive(0);
+	}
+	_assembleBoolean(v) {
+		this._assemblePrimitive(v ? 2 : 1);
+	}
+	_constructBoolean() {
+		/// Branchless.
+		this._encoder.pushByte(
+			OpCode["i32.const"], 1, OpCode["i32.add"], // + 1
+			OpCode["i64.extend_i32_u"], // (int64_t)
+			OpCode["i64.const"], 47, OpCode["i64.shl"], // << 47
+			OpCode["i64.const"], 0x7f, OpCode["i64.xor"], // ~
+			OpCode["f64.reinterpret_i64"], // *(double)&
+		);
+		// W/ branching.
+		///const enc = this._encoder;
+		///enc.pushByte(0x04, Type.f64);
+		///this._assembleBoolean(true);
+		///enc.pushByte(0x05);
+		///this._assembleBoolean(false);
+		///enc.pushByte(0x0B);
+	}
+	_constructCheckTruthy() {
+		this._encoder.pushByte(
+			OpCode["i64.reinterpret_f64"], //  *(int64_t)&
+			OpCode["i64.const"], 47+1, OpCode["i64.shr_s"], // >> 38
+			OpCode["i32.wrap_i64"], // (int32_t)
+			OpCode["i32.const"], 0x7f, OpCode["i32.ne"], // != -1
+		);
+	}
+	_assembleBuiltin(op, args) {
 		const enc = this._encoder;
 		if (f64OpArity[op]) {
 			for (let i = 0; i < f64OpArity[op]; ++i) {
@@ -169,28 +239,34 @@ class Asssembler {
 		} else if (op === "$local") {
 			enc.pushByte(OpCode["local.get"]);
 			enc.pushU32(args[0]);
+		} else if (op === "zero?") {
+			this._assembleExpr(args[0]);
+			enc.pushByte(OpCode["i64.reinterpret_f64"], OpCode["i64.eqz"]);
+			this._constructBoolean();
+		} else if (op === "if") {
+			this._assembleExpr(args[0]);
+			this._constructCheckTruthy();
+			enc.pushByte(0x04, Type.f64);
+			this._assembleExpr(args[1]);
+			enc.pushByte(0x05);
+			this._assembleExpr(args[2]);
+			enc.pushByte(0x0B);
 		} else {
-			switch (op) {
-				case "zero?":
-					this._assembleExpr(args[0])
-					enc.pushByte(0x04, Type.i32);
-					this._assembleExpr(0);
-					enc.pushByte(0x05);
-					this._assembleExpr(1);
-					enc.pushByte(0x0B);
-					break;
-				default:
-					throw new Error(`Unknown op: ${op}`)
-			}
+			throw new Error(`Unknown op: ${op}`)
 		}
 	}
 	_assembleExpr(expr) {
-		if (typeof expr === "number") {
+		const type = typeof expr
+		if (type === "number") {
 			this._assembleNumber(expr);
+		} else if (type === "boolean") {
+			this._assembleBoolean(expr);
+		} else if (expr === null) {
+			this._assembleNil();
 		} else if (Array.isArray(expr)) {
 			if (typeof expr[0] === "string") {
 				const [op, ...args] = expr;
-				this._assemblePrimitive(op, args);
+				this._assembleBuiltin(op, args);
 			}
 		} else {
 			throw new Error(`Unknown expression: ${expr}`);
@@ -199,12 +275,10 @@ class Asssembler {
 	assembleModule(def) {
 		const { functions } = def;
 		const enc = this._encoder;
-
 		enc.pushByte(
 			0x00, 0x61, 0x73, 0x6D, // magic
 			0x01, 0x00, 0x00, 0x00, // version
 		);
-	
 		const section = (id, cb) => {
 			enc.pushByte(id);
 			enc.measuredBlock(cb);
@@ -262,42 +336,71 @@ const hexdump = (buffer) => {
 	}
 }
 
-try {
-	out.log("Assembling bytecode...");
+const lispToString = (expr) => {
+	const type = typeof expr;
+	if (type === "boolean") {
+		return expr.toString();
+	} else if (expr === null) {
+		return "nil";
+	} else if (type === "number") {
+		return expr.toString();
+	} else if (Array.isArray(expr)) {
+		return `(${expr[0]}${expr.slice(1).map(e => ` ${lispToString(e)}`).join("")})`;
+	} else {
+		throw new Error(`Do not know how to pretty print: ${expr}`);
+	}
+};
 
+const evaluateLisp = (code, ...args) => {
 	const bytecode = new Asssembler().assembleModule({
 		functions: [{
 			name: "main",
 			export: true,
 			arg: [ Type.f64 ],
 			ret: [ Type.f64 ],
-			code: ["mul", 3.14, ["mul", ["$local", 0], ["$local", 0]]],
+			code,
 		}],
 	});
+	const module = new WebAssembly.Module(bytecode);
+	const instance = new WebAssembly.Instance(module);
+	return instance.exports.main(...args);
+};
 
-	hexdump(bytecode);
+let _testCount = 0;
+const runTest = (code, expected, ...args) => {
+	out.log(`TEST: ${expected.toString().padStart(5)} === ${lispToString(code)}`)
+	const actual = evaluateLisp(code, ...args);
+	if (!isNaN(expected) ? actual !== expected : !isNaN(actual)) {
+		throw new Error(`Test failed. Expected '${expected}', but got '${actual}'`);
+	}
+};
 
+const showBytecodeLink = (bytecode) => {
 	const link = document.createElement("a");
 	link.href = URL.createObjectURL(new Blob([bytecode], {type: "application/wasm"}));
 	link.innerText = "Download bytecode";
 	link.download = "a.wasm";
 	out.html(link.outerHTML)
+};
 
-	out.log("Compiling module...")
-	const module = new WebAssembly.Module(bytecode);
-
-	out.log("Instantiating...")
-	const imports = {
-		imports: {
-			log(arg) {
-				out.log(arg);
-			},
-		},
-	};
-	const instance = new WebAssembly.Instance(module, imports);
-
-	out.log("Executing `main`...")
-	out.log(`=> ${instance.exports.main(7)}`);
+try {
+	runTest(5, 5);
+	runTest(["add", 1, 1], 2);
+	runTest(["$local", 0], 3.14, 3.14);
+	runTest(["add", 5, ["add", 2, 3]], 10);
+	runTest(["add", 5, ["mul", 2, 3]], 11);
+	runTest(true, NaN);
+	runTest(false, NaN);
+	runTest(null, NaN);
+	runTest(["div", 0, 0], NaN);
+	runTest(["if", true, 100, 0], 100)
+	runTest(["if", false, 100, 0], 0)
+	runTest(["if", null, 100, 0], 0)
+	runTest(["if", 42, 100, 0], 100)
+	runTest(["if", NaN, 100, 0], 100)
+	runTest(["if", ["zero?", 0], 100, 0], 100)
+	runTest(["if", ["zero?", 42], 100, 0], 0)
+	out.log("All tests passed!");
 } catch (err) {
 	out.error(err);
 	throw err;

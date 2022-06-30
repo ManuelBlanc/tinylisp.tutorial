@@ -8,3 +8,5 @@ to learn how compiling & lisp work from the basics.
 + https://buildyourownlisp.com
 + https://webassembly.org/specs/
 + https://developer.mozilla.org/en-US/docs/WebAssembly
++ https://webassembly.github.io/wabt/demo/wasm2wat/
++ https://luajit.org/git/luajit.git
