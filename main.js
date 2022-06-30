@@ -139,6 +139,7 @@ const OpCode = new Proxy({
 	"i32.rotr": 0x78,
 
 	"i64.eqz": 0x50,
+	"i64.eq": 0x51,
 	"i64.ne": 0x52,
 	"i64.or": 0x84,
 	"i64.xor": 0x85,
@@ -205,21 +206,12 @@ class Asssembler {
 		this._assemblePrimitive(v ? 2 : 1);
 	}
 	_constructBoolean() {
-		/// Branchless.
-		this._encoder.pushByte(
-			OpCode["i32.const"], 1, OpCode["i32.add"], // + 1
-			OpCode["i64.extend_i32_u"], // (int64_t)
-			OpCode["i64.const"], 47, OpCode["i64.shl"], // << 47
-			OpCode["i64.const"], 0x7f, OpCode["i64.xor"], // ~
-			OpCode["f64.reinterpret_i64"], // *(double)&
-		);
-		// W/ branching.
-		///const enc = this._encoder;
-		///enc.pushByte(0x04, Type.f64);
-		///this._assembleBoolean(true);
-		///enc.pushByte(0x05);
-		///this._assembleBoolean(false);
-		///enc.pushByte(0x0B);
+		const enc = this._encoder;
+		enc.pushByte(0x04, Type.f64); // ~20% faster than branchless.
+		this._assembleBoolean(true);
+		enc.pushByte(0x05);
+		this._assembleBoolean(false);
+		enc.pushByte(0x0B);
 	}
 	_constructCheckTruthy() {
 		this._encoder.pushByte(
@@ -242,6 +234,12 @@ class Asssembler {
 		} else if (op === "zero?") {
 			this._assembleExpr(args[0]);
 			enc.pushByte(OpCode["i64.reinterpret_f64"], OpCode["i64.eqz"]);
+			this._constructBoolean();
+		} else if (op === "eq?") {
+			this._assembleExpr(args[0]);
+			enc.pushByte(OpCode["i64.reinterpret_f64"]);
+			this._assembleExpr(args[1]);
+			enc.pushByte(OpCode["i64.reinterpret_f64"], OpCode["i64.eq"]);
 			this._constructBoolean();
 		} else if (op === "if") {
 			this._assembleExpr(args[0]);
@@ -351,7 +349,7 @@ const lispToString = (expr) => {
 	}
 };
 
-const evaluateLisp = (code, ...args) => {
+const compileLisp = (code) => {
 	const bytecode = new Asssembler().assembleModule({
 		functions: [{
 			name: "main",
@@ -363,17 +361,42 @@ const evaluateLisp = (code, ...args) => {
 	});
 	const module = new WebAssembly.Module(bytecode);
 	const instance = new WebAssembly.Instance(module);
-	return instance.exports.main(...args);
+	return instance.exports.main;
+};
+
+const evaluateLisp = (code, ...args) => {
+	const main = compileLisp(code);
+	return main(...args);
 };
 
 let _testCount = 0;
 const runTest = (code, expected, ...args) => {
-	out.log(`TEST: ${expected.toString().padStart(5)} === ${lispToString(code)}`)
+	out.log(`TEST: ${expected.toString().padStart(5)} === ${lispToString(code)}`);
 	const actual = evaluateLisp(code, ...args);
 	if (!isNaN(expected) ? actual !== expected : !isNaN(actual)) {
 		throw new Error(`Test failed. Expected '${expected}', but got '${actual}'`);
 	}
 };
+
+const benchmark = async (code) => {
+	const main = compileLisp(code);
+	const results = [];
+	let avg = 0;
+	for (let sets = 0; sets < 5; ++sets) {
+		await new Promise((resolve) => {
+			const t0 = performance.now();
+			for (let reps = 0; reps < 10000000; ++reps) {
+				main(0);
+			}
+			const dt = performance.now() - t0;
+			avg += dt;
+			results.push(`${dt.toFixed(1)} ms`);
+			resolve();
+		})
+	}
+	avg /= results.length;
+	out.log(`BENCHMARK: ${lispToString(code)}  =>  ${results.join("  ")} :: ${avg.toFixed(1)} ms`)
+}
 
 const showBytecodeLink = (bytecode) => {
 	const link = document.createElement("a");
@@ -384,11 +407,11 @@ const showBytecodeLink = (bytecode) => {
 };
 
 try {
-	runTest(5, 5);
-	runTest(["add", 1, 1], 2);
-	runTest(["$local", 0], 3.14, 3.14);
-	runTest(["add", 5, ["add", 2, 3]], 10);
-	runTest(["add", 5, ["mul", 2, 3]], 11);
+	runTest(5, 5)
+	runTest(["add", 1, 1], 2)
+	runTest(["$local", 0], 3.14, 3.14)
+	runTest(["add", 5, ["add", 2, 3]], 10)
+	runTest(["add", 5, ["mul", 2, 3]], 11)
 	runTest(true, NaN);
 	runTest(false, NaN);
 	runTest(null, NaN);
@@ -398,9 +421,22 @@ try {
 	runTest(["if", null, 100, 0], 0)
 	runTest(["if", 42, 100, 0], 100)
 	runTest(["if", NaN, 100, 0], 100)
+	runTest(["if", ["sub", true, null], null, ["add", 1, 1]], NaN)
 	runTest(["if", ["zero?", 0], 100, 0], 100)
 	runTest(["if", ["zero?", 42], 100, 0], 0)
-	out.log("All tests passed!");
+	runTest(["if", ["eq?", true, true], 100, 0], 100)
+	runTest(["if", ["eq?", false, false], 100, 0], 100)
+	runTest(["if", ["eq?", null, null], 100, 0], 100)
+	runTest(["if", ["eq?", NaN, NaN], 100, 0], 100)
+	runTest(["if", ["eq?", true, false], 100, 0], 0)
+	runTest(["if", ["eq?", true, null], 100, 0], 0)
+	runTest(["if", ["eq?", false, null], 100, 0], 0)
+	runTest(["if", ["eq?", NaN, null], 100, 0], 0)
+	out.log("All tests passed!")
+
+	//benchmark(["zero?", 0])
+	//benchmark(["zero?", 42])
+
 } catch (err) {
 	out.error(err);
 	throw err;
