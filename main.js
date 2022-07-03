@@ -221,6 +221,9 @@ class LambdaAssembler {
 		}
 		this._assembleExpr(def.code);
 	}
+	_assert(cond, msg) {
+		if (!cond) throw new Error(`Assemble Error: ${msg}`);
+	}
 	_varSubscope(cb) {
 		this.scopeStack.unshift(new Map());
 		const oldBase = this.base;
@@ -242,9 +245,6 @@ class LambdaAssembler {
 		const id = this.base++;
 		this.scopeStack[0].set(name, id);
 		return id;
-	}
-	_assert(cond, msg) {
-		if (!cond) throw new Error(`Assemble Error: ${msg}`);
 	}
 	_assembleNumber(n) {
 		this.encoder.pushByte(OpCode["f64.const"]);
@@ -565,7 +565,6 @@ const runTest = (code, expected, ...args) => {
 		if (isNaN(expected) ? !isNaN(result) : result !== expected) {
 			myErr = new Error();
 		}
-		
 	} catch (err) {
 		if (!(expected instanceof Error) || -1 === err.message.search(expected.message)) {
 			myErr = result = err
@@ -694,8 +693,6 @@ const testSuite = () => {
 	out.log("All tests passed!")
 }
 
-
-
 testSuite();
 //benchmark(["nan?", 42])
 //_benchmark("control.js", () => 0)
@@ -704,3 +701,154 @@ testSuite();
 //benchmark(["nan?", NaN])
 //benchmark(["add", 1, 1])
 
+class Parser {
+	constructor() {
+	}
+	_assert(cond) {
+		if (!cond) {
+			this.error = new Error(message);
+			throw this.error;
+		}
+	}
+	_skip(n) {
+		this.text = this.text.slice(n).trim();
+	}
+	_parse() {
+		const prim = Parser.PRIMITIVE.exec(this.text);
+		if (prim) {
+			this._skip(prim[0].length);
+			switch (prim[0]) {
+				case "true": return true;
+				case "false": return false;
+				case "nil": return null;
+			}
+		}
+		const ident = Parser.IDENT.exec(this.text);
+		if (ident) {
+			this._skip(ident[0].length);
+			return ident[0];
+		}
+		const num = Parser.NUMBER.exec(this.text);
+		if (num) {
+			this._skip(num[0].length);
+			return parseFloat(num[0]);
+		}
+		if (this.text[0] === "(") {
+			this._skip(1);
+			const list = [];
+			while (true) {
+				this._skip(0);
+				const char = this.text[0];
+				this._assert(char !== undefined, `Unterminated list`);
+				if (char === ")") break;
+				list.push(this._parse());
+			}
+			this._skip(1);
+			return list;
+		}
+		this._assert(false, `Could not parse: '${this.text}'`);
+	}
+	parse(text) {
+		this.text = text;
+		this._skip(0); // Trim.
+		try {
+			return this._parse();
+		} catch (err) {
+			this.error = err;
+		}
+	}
+}
+Parser.PRIMITIVE = /^(?:true|false|nil)\b/;
+Parser.IDENT = /^[a-z?+*/%&@#$=~|<>,.;:_-][0-9a-z?+*/%&@#$=~|<>,.;:_-]*/i;
+Parser.NUMBER = /^[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/;
+
+class Repl {
+	constructor(id, out) {
+		this.element =  document.getElementById(id);
+		this.out = out;
+		this.parser = new Parser();
+		out.scrollToBottom();
+		input.focus();
+		input.addEventListener("keydown", this.onKeyDown.bind(this));
+		this.history = [""];
+		this.historyIndex = 0;
+	}
+	onKeyDown(evt) {
+		if (evt.code === "Enter" && input.value.trim() !== "") {
+			const text = input.value;
+			this.history[(this.historyIndex = this.history.length) - 1] = text;
+			this.history.push("")
+			input.value = "";
+			input.focus();
+			try {
+				if (text === ".clear") {
+					this.out.clear();
+				} else {
+					const code = this.parser.parse(text);
+					if (code === undefined) {
+						this.out.error(code.error);
+					} else {
+						this.out.log(`λ> ${formatCode(code)}`);
+						const asmMod = new ModuleAssembler();
+						asmMod.pushFunction({
+							name: "main",
+							export: true,
+							args: [],
+							code,
+						});
+						const main = asmMod.assemble();
+						this.out.log(main());
+					}
+				}
+			} catch (err) {
+				this.out.error(err);
+				throw err;
+			} finally {
+				this.out.scrollToBottom();
+			}
+			evt.preventDefault();
+		} else if (evt.code === "ArrowUp") {
+			if (this.historyIndex > 0) {
+				this.history[this.historyIndex] = this.element.value;
+				this.element.value = this.history[--this.historyIndex];
+			}
+			evt.preventDefault();
+		} else if (evt.code === "ArrowDown") {
+			if (this.historyIndex < this.history.length-1) {
+				this.history[this.historyIndex] = this.element.value;
+				this.element.value = this.history[++this.historyIndex];
+			}
+			evt.preventDefault();
+		} else if (evt.ctrlKey) { // emacs stuff
+			const element = this.element;
+			switch (evt.code) {
+				case "KeyE":
+					element.selectionStart = element.selectionEnd = element.value.length;
+					break;
+				case "KeyU":
+					element.value = element.value.slice(element.selectionStart); // Fallthrough.
+				case "KeyA":
+					element.selectionStart = element.selectionEnd = 0;
+					break;
+				case "KeyK":
+					element.value = element.value.slice(0, element.selectionStart);
+					break;
+				case "KeyD":
+					const i = element.selectionStart;
+					element.value = element.value.slice(0, i) + element.value.slice(i + 1);
+					element.selectionStart = element.selectionEnd = i;
+					break;
+				case "ArrowRight":
+				case "ArrowLeft":
+				case "KeyZ":
+				case "KeyX":
+				case "KeyC":
+				case "KeyV":
+					return; // Keep default behaviour.
+			}
+			evt.preventDefault();
+		}
+	}
+}
+
+const repl = new Repl("input", out);

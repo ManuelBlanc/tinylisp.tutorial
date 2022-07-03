@@ -2,18 +2,26 @@
 <meta charset='utf-8'>
 <title>TinyLisp.tutorial</title>
 <style>
+* {
+	box-sizing: border-box;
+}
 body {
 	margin: 0;
-}
-#output {
+	padding: 1.5em 2em;
+	display: flex;
+	flex-flow: column nowrap;
+	height: 100vh;
+	width: 100vw;
 	background: #002b36;
 	color: #93a1a1;
 	font-family: Consolas, 'Courier New', monospace;
-	height: 100vh;
-	overflow-y: scroll;
+}
+#output {
+	font-family: inherit;
 	margin: 0;
-	padding: 1.5em 2em;
-	box-sizing: border-box;
+	padding: 0;
+	flex-grow: 1;
+	overflow-y: scroll;
 }
 #output > .entry::before {
 	color: #586e75;
@@ -29,6 +37,35 @@ body {
 #output > .entry.info {
 	color: #2aa198;
 }
+#input {
+	font-size: inherit;
+	background: transparent;
+	color: inherit;
+	font-family: inherit;
+	width: 100%;
+	border: 1px solid #586e75;
+	border-radius: 0.2em;;
+	padding: 0.5em 3em 0.5em;
+	outline: 0;
+}
+#input:focus {
+	border-color: #e0e0e0;
+	color: #e0e0e0;
+}
+.wrapper {
+	margin-top: 1em;
+	position: relative;
+}
+.wrapper::before {
+	font-size: inherit;
+	position: absolute;
+	left: 1.2em;
+	top: 0.55em;
+	color: #586e75;
+	content: "λ>";
+	margin-right: 1em;
+}
 </style>
 <pre id='output'></pre>
+<div class='wrapper'><input id='input' type='text'></div>
 <script src='main.js'></script>
