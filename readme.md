@@ -10,3 +10,5 @@ to learn how compiling & lisp work from the basics.
 + https://developer.mozilla.org/en-US/docs/WebAssembly
 + https://webassembly.github.io/wabt/demo/wasm2wat/
 + https://luajit.org/git/luajit.git
++ https://clojure.org/reference/special_forms
++ wiki.luajit.org/New-Garbage-Collector

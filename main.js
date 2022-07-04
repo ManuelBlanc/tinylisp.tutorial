@@ -5,7 +5,8 @@ const ASSERT = (cond) => {
 
 class Logger {
 	constructor(id) {
-		this.element = document.getElementById("output");
+		this.element = document.getElementById(id);
+		this.autoScroll = true;
 	}
 	_makeEntry() {
 		const date = new Date();
@@ -20,11 +21,15 @@ class Logger {
 		return span;
 	}
 	_writeText(str, extraClass) {
+		const doScroll = this._shouldAutoScroll();
 		const entry = this._makeEntry();
 		if (extraClass) {
 			entry.classList.add(extraClass);
 		}
 		entry.textContent = str + "\n";
+		if (doScroll) {
+			this.scrollToBottom();
+		}
 	}
 	log(str) {
 		this._writeText(str);
@@ -36,12 +41,24 @@ class Logger {
 		this._writeText(str, "warning");
 	}
 	html(html) {
+		const doScroll = this._shouldAutoScroll();
 		const entry = this._makeEntry();
 		entry.innerHTML = html;
 		entry.innerHTML += "\n";
+		if (doScroll) {
+			this.scrollToBottom();
+		}
 	}
 	clear() {
 		this.element.innerText = "";
+	}
+	_shouldAutoScroll() {
+		//const selection = window.getSelection();
+		//if (selection.type === "Range" && this.element.contains(selection.focusNode)) {
+		//	return false;
+		//}
+		// https://developer.mozilla.org/en-US/docs/Web/API/Element/scrollHeight#determine_if_an_element_has_been_totally_scrolled
+		return Math.abs(this.element.scrollHeight - this.element.clientHeight - this.element.scrollTop) <= 1;
 	}
 	scrollToBottom() {
 		this.element.scrollTo(0, this.element.scrollHeight);
@@ -288,6 +305,7 @@ class LambdaAssembler {
 	_assembleBuiltin(op, args) {
 		const enc = this.encoder;
 		if (f64OpArity[op]) {
+			this._assert(args.length === f64OpArity[op], `${op} requires exactly ${f64OpArity[op]} arguments, but received ${args.length}`);
 			for (let i = 0; i < f64OpArity[op]; ++i) {
 				this._assembleExpr(args[i]);
 			}
@@ -301,7 +319,8 @@ class LambdaAssembler {
 			this._assembleExpr(args[0]);
 			enc.pushByte(
 				OpCode["i64.reinterpret_f64"],
-				OpCode["i64.const"], 47, OpCode["i64.shr_s"],
+				OpCode["i64.const"], 1, OpCode["i64.shl"],
+				OpCode["i64.const"], 47+1, OpCode["i64.shr_s"],
 				OpCode["i32.wrap_i64"],
 				OpCode["i32.const"], 0x70, OpCode["i32.eq"],
 			);
@@ -559,7 +578,12 @@ const runTest = (code, expected, ...args) => {
 	const asmMod = new ModuleAssembler();
 	let myErr, result;
 	try {
-		asmMod.pushFunction({ name: "main", export: true, args: ["$1"], code });
+		asmMod.pushFunction({
+			name: "main",
+			export: true,
+			args: args.map((_, i) => `$${i+1}`),
+			code
+		});
 		const main = asmMod.assemble();
 		result = main(...args);
 		if (isNaN(expected) ? !isNaN(result) : result !== expected) {
@@ -622,13 +646,16 @@ const testSuite = () => {
 	out.log("Running test suite...")
 	runTest(5, 5)
 	runTest(["add", 1, 1], 2)
-	runTest("$1", 3.14, 3.14)
+	runTest("$1", 1, 1, 2, 3)
+	runTest("$2", 2, 1, 2, 3)
+	runTest("$3", 3, 1, 2, 3)
 	runTest(["add", 5, ["add", 2, 3]], 10)
 	runTest(["add", 5, ["mul", 2, 3]], 11)
 	runTest(true, NaN);
 	runTest(false, NaN);
 	runTest(null, NaN);
 	runTest(["div", 0, 0], NaN);
+	runTest(["sub", Infinity, Infinity], NaN);
 	runTest(["if", true, 10, 0], 10)
 	runTest(["if", false, 10, 0], 0)
 	runTest(["if", null, 10, 0], 0)
@@ -653,6 +680,7 @@ const testSuite = () => {
 	runTest(["if", ["nan?", true], 10, 0], 0)
 	runTest(["if", ["nan?", null], 10, 0], 0)
 	runTest(["if", ["nan?", 1], 10, 0], 0)
+	runTest(["if", ["nan?", ["sub", Infinity, Infinity]], 10, 0], 10)
 	runTest(["if", ["nan?", ["div", 0, 0]], 10, 0], 10)
 	runTest(["if", ["if", true, false, true], true, 0], 0)
 	runTest(["do", 1, 2, 3], 3)
@@ -693,7 +721,12 @@ const testSuite = () => {
 	out.log("All tests passed!")
 }
 
-testSuite();
+try {
+	testSuite();
+} catch (err) {
+	out.error(err);
+	throw err;
+}
 //benchmark(["nan?", 42])
 //_benchmark("control.js", () => 0)
 //benchmark(0)
@@ -704,9 +737,9 @@ testSuite();
 class Parser {
 	constructor() {
 	}
-	_assert(cond) {
+	_assert(cond, msg) {
 		if (!cond) {
-			this.error = new Error(message);
+			this.error = new Error(msg);
 			throw this.error;
 		}
 	}
@@ -746,20 +779,25 @@ class Parser {
 			this._skip(1);
 			return list;
 		}
+		if (this.text[0] === ";") {
+
+		}
 		this._assert(false, `Could not parse: '${this.text}'`);
 	}
 	parse(text) {
 		this.text = text;
 		this._skip(0); // Trim.
 		try {
-			return this._parse();
+			const val = this._parse();
+			this._assert(this.text === "" || this.text[0] === ";", `Input not fully consumed: '${this.text}'`);
+			return val;
 		} catch (err) {
 			this.error = err;
 		}
 	}
 }
 Parser.PRIMITIVE = /^(?:true|false|nil)\b/;
-Parser.IDENT = /^[a-z?+*/%&@#$=~|<>,.;:_-][0-9a-z?+*/%&@#$=~|<>,.;:_-]*/i;
+Parser.IDENT = /^[a-z?+*/%&@#$=~|<>,.:_-][0-9a-z?+*/%&@#$=~|<>,.;:_-]*/i;
 Parser.NUMBER = /^[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/;
 
 class Repl {
@@ -767,14 +805,14 @@ class Repl {
 		this.element =  document.getElementById(id);
 		this.out = out;
 		this.parser = new Parser();
-		out.scrollToBottom();
 		input.focus();
 		input.addEventListener("keydown", this.onKeyDown.bind(this));
 		this.history = [""];
 		this.historyIndex = 0;
+		this.bell = new Audio("quack.ogg");
 	}
 	onKeyDown(evt) {
-		if (evt.code === "Enter" && input.value.trim() !== "") {
+		if (evt.key === "Enter" && input.value.trim() !== "") {
 			const text = input.value;
 			this.history[(this.historyIndex = this.history.length) - 1] = text;
 			this.history.push("")
@@ -786,7 +824,7 @@ class Repl {
 				} else {
 					const code = this.parser.parse(text);
 					if (code === undefined) {
-						this.out.error(code.error);
+						this.out.error(this.parser.error);
 					} else {
 						this.out.log(`λ> ${formatCode(code)}`);
 						const asmMod = new ModuleAssembler();
@@ -817,9 +855,11 @@ class Repl {
 			if (this.historyIndex < this.history.length-1) {
 				this.history[this.historyIndex] = this.element.value;
 				this.element.value = this.history[++this.historyIndex];
+			} else {
+				this.bell.play();
 			}
 			evt.preventDefault();
-		} else if (evt.ctrlKey) { // emacs stuff
+		} else if (evt.ctrlKey && !evt.metaKey && !evt.shiftKey) { // emacs stuff
 			const element = this.element;
 			switch (evt.code) {
 				case "KeyE":

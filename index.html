@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
 <title>TinyLisp.tutorial</title>
 <style>
 * {
@@ -10,11 +11,13 @@ body {
 	padding: 1.5em 2em;
 	display: flex;
 	flex-flow: column nowrap;
-	height: 100vh;
+	position: fixed;
+	height: 100%;
 	width: 100vw;
 	background: #002b36;
 	color: #93a1a1;
-	font-family: Consolas, 'Courier New', monospace;
+	font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+	font-size: 1em;
 }
 #output {
 	font-family: inherit;
@@ -36,6 +39,9 @@ body {
 }
 #output > .entry.info {
 	color: #2aa198;
+}
+#output a {
+	color: steelblue;
 }
 #input {
 	font-size: inherit;
@@ -64,6 +70,19 @@ body {
 	color: #586e75;
 	content: "λ>";
 	margin-right: 1em;
+	pointer-events: none;
+}
+@media screen and (max-width: 30em) {
+	body {
+		padding: 0.5em 0.5em;
+	}
+	#output {
+		padding-top: 1em;
+		margin: 0 0.45em;
+	}
+	#output > .entry::before {
+		display: none;
+	}
 }
 </style>
 <pre id='output'></pre>
