@@ -614,24 +614,25 @@ const formatSI = (t) => {
 	return '0.000 s';
 };
 
-const _benchmark = (label, chunk) => {
+const _benchmark = (label, chunk, totalReps) => {
 	const results = [];
 	let avg = 0;
+	if (totalReps === undefined) totalReps = 100;
 	for (let sets = 0; sets < 5; ++sets) {
 		const t0 = performance.now();
-		for (let reps = 0; reps < 10000000; ++reps) {
+		for (let reps = 0; reps < totalReps; ++reps) {
 			chunk(0);
 		}
 		const t1 = performance.now();
-		const dt = (t1 - t0) / 10000000;
+		const dt = (t1 - t0) / totalReps / 1000;
 		avg += dt;
 		results.push(formatSI(dt));
 	}
 	avg /= results.length;
-	out.log(`BENCHMARK: ${label}  =>  ${results.join("  ")} :: ${formatSI(avg)}`);
+	out.log(`BENCHMARK: ${label}\n    =>  ${results.join("  ")} :: ${formatSI(avg)}`);
 };
 
-const benchmark = (code) => {
+const benchmark = (code, reps) => {
 	const asmMod = new ModuleAssembler();
 	asmMod.pushFunction({
 		name: "main",
@@ -639,7 +640,7 @@ const benchmark = (code) => {
 		args: ["$1"],
 		code,
 	});
-	_benchmark(formatCode(code), asmMod.assemble());
+	_benchmark(formatCode(code), asmMod.assemble(), reps);
 };
 
 const testSuite = () => {
@@ -712,6 +713,10 @@ const testSuite = () => {
 		["function", ["fact", "i"], ["if", ["le?", "i", 1], 1, ["mul", "i", ["fact", "fact", ["sub", "i", 1]]]]],
 		10,
 	], 3628800);
+	runTest([["function", ["f", "x"], ["f", "f", "x"]],
+		["function", ["fib", "i"], ["if", ["le?", "i", 2], 1, ["add", ["fib", "fib", ["sub", "i", 1]], ["fib", "fib", ["sub", "i", 2]]]]],
+		34,
+	], 5702887);
 	// At the end to make debugging easier.
 	runTest(["do", ["local", ["a", "a"], 3, 5], ["sub", "a", "b"]], Error("Local was already declared"))
 	runTest(["do", ["local", "a", 3], ["local", "a", 5], "a"], Error("Local was already declared"))
@@ -721,18 +726,20 @@ const testSuite = () => {
 	out.log("All tests passed!")
 }
 
-try {
-	testSuite();
-} catch (err) {
-	out.error(err);
-	throw err;
-}
-//benchmark(["nan?", 42])
-//_benchmark("control.js", () => 0)
-//benchmark(0)
-//benchmark(["do", ["local", ["a", "b"], 3, 5], ["sub", "a", "b"]])
-//benchmark(["nan?", NaN])
-//benchmark(["add", 1, 1])
+const benchmarkSuite = () => {
+	const reps = 2; // Low because slow.
+	_benchmark("fibY.js", () => {
+		((f, x) => f(f, x))((fib, i) => i <= 2 ? 1 : fib(fib, i - 1) + fib(fib, i - 2), 34)
+	}, reps);
+	_benchmark("fib.js", () => {
+		const fib = (i) => i <= 2 ? 1 : fib(i-1) + fib(i - 2);
+		fib(34)
+	}, reps);
+	benchmark([["function", ["f", "x"], ["f", "f", "x"]],
+		["function", ["fib", "i"], ["if", ["le?", "i", 2], 1, ["add", ["fib", "fib", ["sub", "i", 1]], ["fib", "fib", ["sub", "i", 2]]]]],
+		34,
+	], reps);
+};
 
 class Parser {
 	constructor() {
@@ -810,6 +817,7 @@ class Repl {
 		this.history = [""];
 		this.historyIndex = 0;
 		this.bell = new Audio("quack.ogg");
+		this.out.log(Repl.HELP_MESSAGE);
 	}
 	onKeyDown(evt) {
 		if (evt.key === "Enter" && input.value.trim() !== "") {
@@ -821,6 +829,14 @@ class Repl {
 			try {
 				if (text === ".clear") {
 					this.out.clear();
+				} else if (text === ".test") {
+					testSuite();
+				} else if (text == ".benchmark") {
+					benchmarkSuite();
+				} else if (text === ".quack") {
+					this.bell.play();
+				} else if (text === ".help") {
+					this.out.log(Repl.HELP_MESSAGE);
 				} else {
 					const code = this.parser.parse(text);
 					if (code === undefined) {
@@ -890,5 +906,22 @@ class Repl {
 		}
 	}
 }
+Repl.HELP_MESSAGE = `Welcome to the ${document.title} REPL @ ${window.location}
+West of House
+A rubber mat saying 'Welcome to Lisp!' lies by the door.
 
-const repl = new Repl("input", out);
+
+You can type Lisp expressions like (add 3 5).
+Try .test to see some of the valid syntax. 
+
+
+Available meta-commands:
+
+    .test             Run the test suite.
+    .benchmark        Run a small benchmark.
+    .clear            Clear the screen.
+    .quack            Quack!
+    .help             Show this help message.
+`;
+
+new Repl("input", out);
