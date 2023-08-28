@@ -12,3 +12,4 @@ to learn how compiling & lisp work from the basics.
 + https://luajit.org/git/luajit.git
 + https://clojure.org/reference/special_forms
 + wiki.luajit.org/New-Garbage-Collector
++ https://github.com/rui314/minilisp
