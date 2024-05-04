@@ -825,16 +825,39 @@ class Repl {
 		this.parser = new Parser();
 		input.focus();
 		input.addEventListener("keydown", this.onKeyDown.bind(this));
-		this.history = [""];
-		this.historyIndex = 0;
 		this.bell = new Audio("quack.ogg");
 		this.out.log(Repl.HELP_MESSAGE);
+		try {
+			const historyJSON = window.sessionStorage.getItem(Repl.STORAGE_HISTORY_KEY);
+			if (historyJSON) {
+				this.history = JSON.parse(historyJSON);
+				ASSERT(Array.isArray(this.history));
+				for (const item of this.history) {
+					ASSERT(typeof item === "string");
+				}
+				this.out.log("Loaded session history.")
+			}
+		} catch (e) {
+			console.error(e);
+		}
+		if (!this.history) {
+			this.history = [""];
+		}
+		this.historyIndex = this.history.length -1;
 	}
 	onKeyDown(evt) {
 		if (evt.key === "Enter" && input.value.trim() !== "") {
 			const text = input.value;
-			this.history[(this.historyIndex = this.history.length) - 1] = text;
-			this.history.push("")
+			if (this.history.at(-2) !== text) {
+				if (this.history.length > 999) {
+					this.history.shift();
+				}
+				this.history[(this.historyIndex = this.history.length) - 1] = text; // Overrides.
+				this.history.push("");
+				window.sessionStorage.setItem(Repl.STORAGE_HISTORY_KEY, JSON.stringify(this.history));
+			} else {
+				this.historyIndex = this.history.length - 1;
+			}
 			input.value = "";
 			input.focus();
 			try {
@@ -917,6 +940,7 @@ class Repl {
 		}
 	}
 }
+Repl.STORAGE_HISTORY_KEY = "ReplHistory";
 Repl.HELP_MESSAGE = `Welcome to the ${document.title} REPL @ ${window.location}
 West of House
 A rubber mat saying 'Welcome to Lisp!' lies by the door.
