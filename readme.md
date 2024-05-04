@@ -1,4 +1,4 @@
-# TinyLisp.tutorial
+# TinyTutorial.LispCompiler
 
 I'm following the tutorial at https://bernsteinbear.com/blog/compiling-a-lisp-0/
 to learn how compiling & lisp work from the basics.

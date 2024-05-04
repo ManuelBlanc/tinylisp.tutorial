@@ -564,11 +564,11 @@ const formatCode = (expr) => {
 	}
 };
 
-const showBytecodeLink = (bytecode) => {
+const showBytecodeLink = (bytecode, filename) => {
 	const link = document.createElement("a");
 	link.href = URL.createObjectURL(new Blob([bytecode], {type: "application/wasm"}));
 	link.innerText = "Download bytecode";
-	link.download = "a.wasm";
+	link.download = filename ?? "a.wasm";
 	out.html(link.outerHTML);
 };
 
@@ -614,7 +614,7 @@ const formatSI = (t) => {
 	return '0.000 s';
 };
 
-const _benchmark = (label, chunk, totalReps) => {
+const benchmark = (label, chunk, totalReps) => {
 	const results = [];
 	let avg = 0;
 	if (totalReps === undefined) totalReps = 100;
@@ -632,7 +632,7 @@ const _benchmark = (label, chunk, totalReps) => {
 	out.log(`BENCHMARK: ${label}\n    =>  ${results.join("  ")} :: ${formatSI(avg)}`);
 };
 
-const benchmark = (code, reps) => {
+const benchmarkCode = (code, reps) => {
 	const asmMod = new ModuleAssembler();
 	asmMod.pushFunction({
 		name: "main",
@@ -640,7 +640,7 @@ const benchmark = (code, reps) => {
 		args: ["$1"],
 		code,
 	});
-	_benchmark(formatCode(code), asmMod.assemble(), reps);
+	benchmark(formatCode(code), asmMod.assemble(), reps);
 };
 
 const testSuite = () => {
@@ -728,14 +728,25 @@ const testSuite = () => {
 
 const benchmarkSuite = () => {
 	const reps = 2; // Low because slow.
-	_benchmark("fibY.js", () => {
+	benchmark("fibY.js", () => {
 		((f, x) => f(f, x))((fib, i) => i <= 2 ? 1 : fib(fib, i - 1) + fib(fib, i - 2), 34)
 	}, reps);
-	_benchmark("fib.js", () => {
-		const fib = (i) => i <= 2 ? 1 : fib(i-1) + fib(i - 2);
+	benchmark("fib.js", () => {
+		const fib = (i) => i <= 2 ? 1 : fib(i - 1) + fib(i - 2);
 		fib(34)
 	}, reps);
-	benchmark([["function", ["f", "x"], ["f", "f", "x"]],
+	benchmark("fib.asmjs", () => { // http://asmjs.org/spec/latest
+		function Module() {
+			"use asm";
+			function fib(i) {
+				i = +i;
+				return i <= 2.0 ? 1.0 : +fib(i - 1.0) + +fib(i - 2.0);
+			}
+			return { fib: fib }
+		}
+		Module().fib(34)
+	}, reps);
+	benchmarkCode([["function", ["f", "x"], ["f", "f", "x"]],
 		["function", ["fib", "i"], ["if", ["le?", "i", 2], 1, ["add", ["fib", "fib", ["sub", "i", 1]], ["fib", "fib", ["sub", "i", 2]]]]],
 		34,
 	], reps);
